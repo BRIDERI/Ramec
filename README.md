@@ -1,4 +1,4 @@
-# RAMEC — Revisión Automática Multimodal de Entregables de Construcción - Revisión de entregables AVP
+# RAMEC — Revisión de entregables AVP
 
 Sistema que replica el reporte de 5 pestañas del validador de producción
 (`REVARCHIVOS_*.py`), pero reemplazando el barrido de OCR a ciegas por dos modelos
@@ -42,7 +42,7 @@ python -m venv .venv && source .venv/bin/activate   # recomendado
 pip install -r requirements.txt
 ```
 
-### 3. Descargar los pesos del modelo (no incluidos en el repo)
+### 3. Descargar los pesos del modelo
 Los pesos `best.pt` (~40 MB c/u) se publican como assets del *Release*. Descárgalos con:
 ```bash
 REPO=jmachadot/ramec TAG=v1.0 bash scripts/download_models.sh
@@ -64,7 +64,7 @@ python src/convert.py --planos data/raw/planos --documentos data/raw/documentos 
 python src/train.py --task both
 ```
 
-## Estado: funcionando de punta a punta
+## Estado: funcionando
 
 Validado sobre el lote de prueba (5 planos + 5 documentos), el rebuild reproduce
 el reporte de producción y lo supera en planos:
