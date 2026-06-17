@@ -18,6 +18,8 @@ Docente:
 
 ---
 
+[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/jmachadot/ramec/blob/main/RAMEC_colab.ipynb)
+
 ## Instalación y ejecución
 
 Para **solo ejecutar la validación** (sin reentrenar) necesitas: el código (ya en este
