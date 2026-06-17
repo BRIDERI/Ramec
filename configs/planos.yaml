@@ -1,0 +1,32 @@
+# RAMEC - dataset planos (modelo del rótulo, clases pobladas 0..8)
+# Opción A: nc=23 y la lista global completa (las clases 9..22 quedan vacías).
+# `path` apunta a la copia LOCAL en /content para lectura rápida durante el
+# entrenamiento; los datos se sincronizan desde Drive con scripts/sync.py.
+path: /content/ramec/data/planos
+train: images/train
+val: images/val
+nc: 23
+names:
+  - membrete
+  - codigo
+  - fecha
+  - contenido
+  - proyecto
+  - revisiones
+  - responsables
+  - validacion_profesional
+  - entidades
+  - validacion_profesional_hoja_control
+  - fecha_ultima_revision_hoja_control
+  - proyecto_caratula
+  - titulo_documento_caratula
+  - num_documento_caratula
+  - fecha_caratula
+  - num_documento_hoja_control
+  - titulo_documento_hoja_control
+  - fecha_aprobacion_hoja_control
+  - responsables_hoja_control
+  - firmas_aprobacion_paginas
+  - logo_entidades_caratula
+  - num_revision_hoja_control
+  - logo_entidades_paginas

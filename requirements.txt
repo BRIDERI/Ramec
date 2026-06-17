@@ -1,0 +1,19 @@
+# RAMEC — dependencias de Python
+# YOLO11 requiere ultralytics >= 8.3.0. Los rangos de abajo garantizan
+# compatibilidad. Para reproducir EXACTAMENTE tu entorno de Colab, genera el
+# pin completo allí con:   pip freeze > requirements.lock.txt
+#
+# Núcleo ML
+ultralytics>=8.3.0,<9
+torch>=2.2
+torchvision>=0.17
+# OCR / PDF
+pdfplumber>=0.11
+pdf2image>=1.17
+pytesseract>=0.3.10
+pillow>=10.0
+# Datos / cómputo / reporte
+numpy>=1.26
+pandas>=2.0
+openpyxl>=3.1
+pyyaml>=6.0
