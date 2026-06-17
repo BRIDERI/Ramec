@@ -1,9 +1,22 @@
-# RAMEC — Revisión de entregables AVP (rebuild ML)
+# RAMEC — Revisión Automática Multimodal de Entregables de Construcción - Revisión de entregables AVP
 
 Sistema que replica el reporte de 5 pestañas del validador de producción
 (`REVARCHIVOS_*.py`), pero reemplazando el barrido de OCR a ciegas por dos modelos
 de detección entrenados con anotaciones de CVAT. El OCR solo lee **dentro** de la
 caja que el modelo localiza, sobre el render a resolución nativa.
+
+---
+
+> Examen Final - Maestría en Inteligencia Artificial · Curso de Redes Neuronales y Aprendizaje Profundo · Sección A · Grupo 7
+
+Integrantes:
+- Julio Machado Torres.
+- Brigitte Scarlett Del Río Ricce.
+
+Docente:
+- Ph.D. Aldo Camargo Fernández Baca.
+
+---
 
 ## Instalación y ejecución
 
@@ -14,7 +27,7 @@ entrenados `best.pt` (se distribuyen aparte; ver paso 3).
 ### 1. Clonar e instalar dependencias del sistema
 Tesseract y Poppler **no** se instalan con pip:
 ```bash
-git clone https://github.com/<usuario>/ramec.git
+git clone https://github.com/jmachadot/ramec.git
 cd ramec
 # Ubuntu/Debian
 sudo apt-get update && sudo apt-get install -y tesseract-ocr tesseract-ocr-spa poppler-utils
@@ -32,7 +45,7 @@ pip install -r requirements.txt
 ### 3. Descargar los pesos del modelo (no incluidos en el repo)
 Los pesos `best.pt` (~40 MB c/u) se publican como assets del *Release*. Descárgalos con:
 ```bash
-REPO=<usuario>/ramec TAG=v1.0 bash scripts/download_models.sh
+REPO=jmachadot/ramec TAG=v1.0 bash scripts/download_models.sh
 ```
 Esto deja `models/planos/best.pt` y `models/documentos/best.pt`. También puedes bajarlos
 a mano desde la pestaña **Releases** del repositorio.
