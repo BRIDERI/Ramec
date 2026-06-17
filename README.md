@@ -1,4 +1,4 @@
-# RAMEC — Revisión de entregables AVP
+# RAMEC — Revisión Automática Multimodal de Entregables de Construcción - Revisión de entregables AVP
 
 Sistema que replica el reporte de 5 pestañas del validador de producción
 (`REVARCHIVOS_*.py`), pero reemplazando el barrido de OCR a ciegas por dos modelos
