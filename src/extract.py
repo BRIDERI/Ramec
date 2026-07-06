@@ -333,22 +333,21 @@ def leer_no_doc(crop):
 
 
 def leer_titulo(crop):
-    """Lee el título prefiriendo la ESCALA DE GRISES por fidelidad de caracteres.
+    textos = []
+    for psm in (4, 6, 11):
+        for t in ocr_variants(crop, psm=psm):
+            t = re.sub(r"\s+", " ", t).strip()
+            t = limpiar_titulo_control(t)
+            t = re.sub(r"\b(DON|DN|HUTO|GOCUMENTO|DOCUMENTO)\b", " ", t, flags=re.I)
+            t = re.sub(r"\s+", " ", t).strip()
+            if len(t) >= 3:
+                textos.append(t)
 
-    El gris con autocontraste (variante 0) conserva el antialiasing y distingue 0 de O;
-    binarizar mete errores (3PL01 -> 3PLO1). Pero si el gris saliera corto/ruidoso,
-    no queremos quedarnos con basura: preferimos el gris solo cuando su longitud es
-    comparable a la mejor lectura; si no, caemos a la más larga.
-    """
-    textos = [re.sub(r"\s+", " ", t).strip() for t in ocr_variants(crop, psm=6)]
-    textos = [t for t in textos if len(t) >= 3]
     if not textos:
         return ""
-    maxlen = max(len(t) for t in textos)
-    for t in textos:  # textos[0] = escala de grises (la de mayor fidelidad)
-        if len(t) >= 0.9 * maxlen:
-            return t
-    return max(textos, key=len)
+
+    textos = sorted(set(textos), key=len, reverse=True)
+    return textos[0]
 
 
 def leer_fecha(crop):
