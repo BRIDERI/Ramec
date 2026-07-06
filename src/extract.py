@@ -67,11 +67,28 @@ RX_LABEL_TITULO = re.compile(
     r"|\b(?:TITULO|TITUL\w*|TUTO|TULO)\s+(?:DELA|DEL|DE|CE)\b"
 )
 
-
+#Cambio
 def limpiar_titulo_control(s):
     norm = _norm_text_cmp(s)
+
     norm = RX_LABEL_TITULO.sub(" ", norm)
+
+    norm = re.sub(
+        r"\bTITULO\s+DEL\s+DOCUMENTO\b|\bTITULO\s+DOCUMENTO\b|\bTITULO\s+DEL\s+DOC\b",
+        " ",
+        norm,
+        flags=re.IGNORECASE
+    )
+
+    norm = re.sub(
+        r"\bTITULO\b|\bDOCUMENTO\b",
+        " ",
+        norm,
+        flags=re.IGNORECASE
+    )
+
     return re.sub(r"\s+", " ", norm).strip()
+#fin cambio
 
 
 def canon_codigos(s):
