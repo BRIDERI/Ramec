@@ -18,7 +18,7 @@ Docente:
 
 ---
 
-[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/jmachadot/ramec/blob/main/RAMEC_colab.ipynb)
+[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/BRIDERI/Ramec/blob/main/RAMEC_colab.ipynb)
 
 ## Instalación y ejecución
 
