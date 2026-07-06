@@ -360,24 +360,21 @@ def leer_fecha(crop):
 
 
 def leer_fecha_ultima(crop):
-    """Para la columna 'Fecha del cambio' de la hoja de control: la fecha MÁS RECIENTE.
-
-    El recorte abarca varias filas de revisión; producción usaba la última. Leemos
-    todas las fechas (formato d/m/aaaa y '6 de abril de 2026'), sobre varias
-    binarizaciones, y devolvemos la máxima.
-    """
     fechas = []
-    for txt in ocr_variants(crop, psm=6):
-        txt = _strip_accents(txt).upper()
-        for m in RX_FECHA_DMY.finditer(txt):
-            d, mo, y = m.groups()
-            fechas.append((int(y), int(mo), int(d)))
-        for m in RX_FECHA_TEXTO.finditer(txt):
-            d, mes, y = m.groups()
-            mo = MESES.get(_strip_accents(mes).upper(), "")
-            if mo:
+    for psm in (4, 11, 6):
+        for txt in ocr_variants(crop, psm=psm):
+            txt = _strip_accents(txt).upper()
+            for m in RX_FECHA_DMY.finditer(txt):
+                d, mo, y = m.groups()
                 fechas.append((int(y), int(mo), int(d)))
+            for m in RX_FECHA_TEXTO.finditer(txt):
+                d, mes, y = m.groups()
+                mo = MESES.get(_strip_accents(mes).upper(), "")
+                if mo:
+                    fechas.append((int(y), int(mo), int(d)))
+
     if not fechas:
         return ""
+
     y, mo, d = max(fechas)
     return f"{d:02d}/{mo:02d}/{y}"
