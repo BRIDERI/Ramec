@@ -29,7 +29,7 @@ entrenados `best.pt` (se distribuyen aparte; ver paso 3).
 ### 1. Clonar e instalar dependencias del sistema
 Tesseract y Poppler **no** se instalan con pip:
 ```bash
-git clone https://github.com/jmachadot/ramec.git
+git clone https://github.com/BRIDERI/Ramec.git
 cd ramec
 # Ubuntu/Debian
 sudo apt-get update && sudo apt-get install -y tesseract-ocr tesseract-ocr-spa poppler-utils
@@ -47,7 +47,7 @@ pip install -r requirements.txt
 ### 3. Descargar los pesos del modelo
 Los pesos `best.pt` (~40 MB c/u) se publican como assets del *Release*. Descárgalos con:
 ```bash
-REPO=jmachadot/ramec TAG=v1.0 bash scripts/download_models.sh
+REPO=BRIDERI/Ramec TAG=v1.0 bash scripts/download_models.sh
 ```
 Esto deja `models/planos/best.pt` y `models/documentos/best.pt`. También puedes bajarlos
 a mano desde la pestaña **Releases** del repositorio.
