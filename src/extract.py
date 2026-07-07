@@ -333,21 +333,38 @@ def leer_no_doc(crop):
 
 
 def leer_titulo(crop):
-    textos = []
-    for psm in (4, 6, 11):
+    candidatos = []
+
+    for psm in (11, 4, 6):
         for t in ocr_variants(crop, psm=psm):
             t = re.sub(r"\s+", " ", t).strip()
             t = limpiar_titulo_control(t)
-            t = re.sub(r"\b(DON|DN|HUTO|GOCUMENTO|DOCUMENTO)\b", " ", t, flags=re.I)
-            t = re.sub(r"\s+", " ", t).strip()
-            if len(t) >= 3:
-                textos.append(t)
 
-    if not textos:
+            # Quitar basura típica del OCR, sin borrar palabras reales del título
+            t = re.sub(r"\b(DON|DN|HUTO|GOCUMENTO)\b", " ", t, flags=re.I)
+            t = re.sub(r"\s+", " ", t).strip()
+
+            # Evitar lecturas que solo son etiqueta o basura
+            if len(t) >= 10 and not re.fullmatch(r"(DOCUMENTO|TITULO|DEL|DE|\s)+", t, flags=re.I):
+                candidatos.append(t)
+
+    if not candidatos:
         return ""
 
-    textos = sorted(set(textos), key=len, reverse=True)
-    return textos[0]
+    # Preferir el candidato con palabras técnicas reales y sin repetir "DE DE"
+    candidatos = sorted(
+        set(candidatos),
+        key=lambda x: (
+            "ESTUDIO" in x.upper(),
+            "ESTRUCTURAS" in x.upper(),
+            len(x)
+        ),
+        reverse=True
+    )
+
+    titulo = candidatos[0]
+    titulo = re.sub(r"\bDE\s+DE\b", "DE", titulo, flags=re.I)
+    return re.sub(r"\s+", " ", titulo).strip()
 
 
 def leer_fecha(crop):
