@@ -9,6 +9,10 @@ Además guarda recortes de:
 - fecha_aprobacion_hoja_control
 - num_documento_hoja_control
 - titulo_documento_hoja_control
+- validacion_profesional_hoja_control
+- responsables_hoja_control
+- firmas_aprobacion_paginas
+- logo_entidades_paginas
 
 Uso:
     python scripts/diag_control.py --pdfs pdfs --model-doc models/documentos/best.pt
@@ -32,6 +36,12 @@ TIT_CTRL = C.NAME_TO_ID["titulo_documento_hoja_control"]               # usualme
 
 # Esta clase existe en tu salida del modelo. La dejamos protegida por si cambia el catálogo.
 FEC_APROB_CTRL = C.NAME_TO_ID.get("fecha_aprobacion_hoja_control")
+
+# Clases para diagnosticar validación profesional y firmas/sellos
+VALID_PROF_CTRL = C.NAME_TO_ID.get("validacion_profesional_hoja_control")
+RESP_CTRL = C.NAME_TO_ID.get("responsables_hoja_control")
+FIRMAS_PAGS = C.NAME_TO_ID.get("firmas_aprobacion_paginas")
+LOGOS_PAGS = C.NAME_TO_ID.get("logo_entidades_paginas")
 
 DPI_DOC = 300
 N_PAGS = 6
@@ -149,6 +159,16 @@ def main():
     if FEC_APROB_CTRL is not None:
         ids_a_guardar[FEC_APROB_CTRL] = "fecha_aprobacion_hoja_control"
 
+    extras = {
+        VALID_PROF_CTRL: "validacion_profesional_hoja_control",
+        RESP_CTRL: "responsables_hoja_control",
+        FIRMAS_PAGS: "firmas_aprobacion_paginas",
+        LOGOS_PAGS: "logo_entidades_paginas",
+    }
+    for cid, nombre in extras.items():
+        if cid is not None:
+            ids_a_guardar[cid] = nombre
+
     for p in sorted(Path(args.pdfs).rglob("*.pdf")):
         tipo, *_ = NM.validar_nombre(p, sets_validos, doc_tipo_map)
         if tipo != "DOCUMENTO":
@@ -179,7 +199,7 @@ def main():
                 marca = "  <-- tiene clases de CONTROL"
             print(f"  pág {i}: {etiquetas or '(nada)'}{marca}")
 
-            # Guardar recortes de fecha, numdoc y título si están en esta página
+            # Guardar recortes de fecha, numdoc, título, validación profesional, firmas y logos si están en esta página
             presentes = [cid for cid in ids_a_guardar if cid in best]
             if presentes:
                 outdir = Path(args.out_crops)
