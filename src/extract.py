@@ -394,3 +394,310 @@ def leer_fecha_ultima(crop):
 
     y, mo, d = max(fechas)
     return f"{d:02d}/{mo:02d}/{y}"
+
+# ================== VALIDACIÓN PROFESIONAL DE HOJA DE CONTROL ==================
+def _cluster_indices(indices):
+    """Agrupa índices consecutivos. Se usa para localizar líneas horizontales de tabla."""
+    out = []
+    indices = list(indices)
+    if not indices:
+        return out
+    start = prev = int(indices[0])
+    for value in indices[1:]:
+        value = int(value)
+        if value <= prev + 1:
+            prev = value
+        else:
+            out.append((start, prev))
+            start = prev = value
+    out.append((start, prev))
+    return out
+
+
+def _segmentar_filas_tabla(crop, line_ratio=0.45, filas_esperadas=None):
+    """Divide un recorte tabular en filas usando las líneas horizontales.
+
+    line_ratio alto (0.85): ignora líneas internas de Nombre/Cargo y conserva
+    solamente los límites completos de cada responsable.
+    line_ratio medio (0.45): funciona para la columna de firmas.
+    """
+    import numpy as np
+
+    gray = np.asarray(ImageOps.grayscale(crop))
+    if gray.size == 0:
+        return []
+
+    dark = gray < 135
+    score = dark.mean(axis=1)
+    idx = np.where(score >= line_ratio)[0]
+    clusters = _cluster_indices(idx)
+    bounds = [int(round((a + b) / 2)) for a, b in clusters]
+
+    height = crop.height
+    edge_tol = max(5, int(height * 0.02))
+
+    if not bounds or bounds[0] > edge_tol:
+        bounds = [0] + bounds
+    else:
+        bounds[0] = 0
+
+    if not bounds or bounds[-1] < height - 1 - edge_tol:
+        bounds.append(height - 1)
+    else:
+        bounds[-1] = height - 1
+
+    # Fusiona líneas casi contiguas (una línea de tabla suele ocupar 2-4 píxeles).
+    min_gap = max(10, int(height * 0.035))
+    compact = []
+    for y in bounds:
+        if not compact or y - compact[-1] >= min_gap:
+            compact.append(y)
+        else:
+            compact[-1] = int(round((compact[-1] + y) / 2))
+
+    min_row_h = max(18, int(height * 0.08))
+    rows = [(a, b) for a, b in zip(compact[:-1], compact[1:]) if b - a >= min_row_h]
+
+    if filas_esperadas and 2 <= int(filas_esperadas) <= 6 and len(rows) != int(filas_esperadas):
+        n = int(filas_esperadas)
+        rows = [
+            (int(round(i * height / n)), int(round((i + 1) * height / n)))
+            for i in range(n)
+        ]
+
+    return rows
+
+
+def _limpiar_nombre_responsable(nombre):
+    """Limpia solo ruido OCR alrededor del nombre, conservando mayúsculas/minúsculas."""
+    nombre = (nombre or "").replace("|", " ").replace("_", " ")
+    nombre = re.split(
+        r"\b(?:CARGO|FECHA|FIRMA|ELABOR[ÓO]?|REVIS[ÓO]?|APROB[ÓO]?)\b",
+        nombre,
+        maxsplit=1,
+        flags=re.IGNORECASE,
+    )[0]
+    nombre = re.sub(r"^[^A-Za-zÁÉÍÓÚÜÑáéíóúüñ]+", "", nombre)
+    nombre = re.sub(r"[^A-Za-zÁÉÍÓÚÜÑáéíóúüñ'´.\-\s]", " ", nombre)
+    nombre = re.sub(r"\s+", " ", nombre).strip(" .:-")
+
+    # Evita aceptar como nombre una etiqueta o una lectura demasiado pobre.
+    palabras = re.findall(r"[A-Za-zÁÉÍÓÚÜÑáéíóúüñ]{2,}", nombre)
+    if len(palabras) < 2:
+        return ""
+    return nombre
+
+
+def _extraer_nombres_de_texto(texto):
+    """Extrae, en orden, cada valor ubicado después de 'Nombre:'."""
+    nombres = []
+    for match in re.finditer(r"(?im)\bNOMBRE\s*[:.;\-]?\s*([^\r\n]+)", texto or ""):
+        nombre = _limpiar_nombre_responsable(match.group(1))
+        if nombre:
+            nombres.append(nombre)
+    return nombres
+
+
+def leer_responsables_control(crop):
+    """Lee Elaboró, Revisó, Aprobó 1 y, si existe, Aprobó 2.
+
+    Devuelve:
+        {
+            "nombres": [nombre1, nombre2, ...],
+            "filas": 3 o 4,
+            "texto_ocr": texto seleccionado
+        }
+
+    Las posiciones se asignan por el orden vertical de la tabla:
+    1=Elaboró, 2=Revisó, 3=Aprobó 1, 4=Aprobó 2.
+    """
+    candidatos = []
+
+    for psm in (6, 4, 11):
+        for texto in ocr_variants(crop, psm=psm):
+            nombres = _extraer_nombres_de_texto(texto)
+            texto_norm = _strip_accents(texto).upper()
+            roles = len(re.findall(r"\b(?:ELABOR\w*|REVIS\w*|APROB\w*)\b", texto_norm))
+            score = len(nombres) * 100 + roles * 10 + min(len(texto), 300) / 300
+            candidatos.append((score, nombres, texto))
+
+    if candidatos:
+        _, nombres_globales, mejor_texto = max(candidatos, key=lambda x: x[0])
+    else:
+        nombres_globales, mejor_texto = [], ""
+
+    # Las líneas de ancho completo separan responsables; las líneas Nombre/Cargo
+    # no cruzan todo el bloque y se descartan con line_ratio=0.85.
+    rows = _segmentar_filas_tabla(crop, line_ratio=0.85)
+    n_filas = len(rows) if 2 <= len(rows) <= 6 else 0
+
+    nombres_por_fila = []
+    for y0, y1 in rows[:4]:
+        row = crop.crop((0, y0, crop.width, y1))
+        mejores = []
+        for psm in (6, 11, 4):
+            for texto in ocr_variants(row, psm=psm):
+                ns = _extraer_nombres_de_texto(texto)
+                if ns:
+                    mejores.append(ns[0])
+        nombres_por_fila.append(max(mejores, key=len) if mejores else "")
+
+    # Si la lectura por fila produjo más información posicional, se prefiere.
+    if nombres_por_fila and sum(bool(x) for x in nombres_por_fila) >= len(nombres_globales):
+        nombres = nombres_por_fila
+    else:
+        nombres = list(nombres_globales)
+
+    n_filas = max(n_filas, len(nombres))
+    if n_filas == 0:
+        # Aunque el cuadro esté completamente vacío, los tres roles mínimos
+        # siguen siendo obligatorios: Elaboró, Revisó y Aprobó.
+        n_filas = 3
+    n_filas = max(3, min(4, n_filas))
+
+    nombres = (nombres + [""] * n_filas)[:n_filas]
+    return {"nombres": nombres, "filas": n_filas, "texto_ocr": mejor_texto}
+
+
+def _extraer_fechas_texto(texto):
+    """Devuelve fechas válidas dd/mm/aaaa encontradas en un texto OCR."""
+    import datetime as _dt
+
+    out = []
+    texto_sin_tildes = _strip_accents(texto or "").upper()
+
+    for match in RX_FECHA_DMY.finditer(texto_sin_tildes):
+        d, mo, y = map(int, match.groups())
+        try:
+            _dt.date(y, mo, d)
+        except ValueError:
+            continue
+        out.append(f"{d:02d}/{mo:02d}/{y:04d}")
+
+    for match in RX_FECHA_TEXTO.finditer(texto_sin_tildes):
+        d, mes, y = match.groups()
+        mo = MESES.get(_strip_accents(mes).upper())
+        if not mo:
+            continue
+        try:
+            _dt.date(int(y), int(mo), int(d))
+        except ValueError:
+            continue
+        out.append(f"{int(d):02d}/{int(mo):02d}/{int(y):04d}")
+
+    return out
+
+
+def leer_fechas(crop):
+    """Lee todas las fechas distintas del recorte, conservando su orden."""
+    fechas = []
+    for psm in (4, 11, 6):
+        for texto in ocr_variants(crop, psm=psm):
+            for fecha in _extraer_fechas_texto(texto):
+                if fecha not in fechas:
+                    fechas.append(fecha)
+    return fechas
+
+
+def _fila_tiene_firma(row_crop):
+    """Determina si una fila contiene rúbrica/sello, no solo la palabra 'Firma'.
+
+    Se ignora la parte izquierda de la celda, donde está impresa la etiqueta
+    'Firma', y se evalúa tinta coloreada o tinta oscura con extensión suficiente.
+    """
+    import numpy as np
+
+    arr = np.asarray(row_crop.convert("RGB"))
+    if arr.size == 0:
+        return False, {"pixeles_color": 0, "pixeles_oscuros": 0}
+
+    height, width = arr.shape[:2]
+    x0 = max(1, int(width * 0.32))
+    x1 = max(x0 + 1, width - max(2, int(width * 0.015)))
+    y0 = max(1, int(height * 0.06))
+    y1 = max(y0 + 1, height - max(2, int(height * 0.06)))
+    sub = arr[y0:y1, x0:x1]
+
+    if sub.size == 0:
+        return False, {"pixeles_color": 0, "pixeles_oscuros": 0}
+
+    gray = np.asarray(ImageOps.grayscale(Image.fromarray(sub)))
+    sat = sub.max(axis=2).astype(int) - sub.min(axis=2).astype(int)
+
+    # Color: útil para firmas azules incluso muy tenues.
+    color_mask = (sat > 8) & (gray < 252)
+    # Oscuro: útil para firmas negras, sellos y firmas escaneadas.
+    dark_mask = gray < 210
+
+    # Elimina líneas rectas de tabla que pudieran quedar en el recorte.
+    for mask in (color_mask, dark_mask):
+        if mask.size:
+            mask[mask.mean(axis=1) > 0.65, :] = False
+            mask[:, mask.mean(axis=0) > 0.65] = False
+
+    def metrics(mask):
+        ys, xs = np.where(mask)
+        if len(xs) == 0:
+            return 0, 0, 0
+        return (
+            int(len(xs)),
+            int(xs.max() - xs.min() + 1),
+            int(ys.max() - ys.min() + 1),
+        )
+
+    color_px, color_w, color_h = metrics(color_mask)
+    dark_px, dark_w, dark_h = metrics(dark_mask)
+    area = int(gray.size)
+
+    color_ok = (
+        color_px >= max(18, int(area * 0.0015))
+        and color_w >= max(8, int(gray.shape[1] * 0.08))
+        and color_h >= max(4, int(gray.shape[0] * 0.06))
+    )
+    dark_ok = (
+        dark_px >= max(60, int(area * 0.004))
+        and dark_w >= max(10, int(gray.shape[1] * 0.10))
+        and dark_h >= max(5, int(gray.shape[0] * 0.10))
+    )
+
+    return bool(color_ok or dark_ok), {
+        "pixeles_color": color_px,
+        "ancho_color": color_w,
+        "alto_color": color_h,
+        "pixeles_oscuros": dark_px,
+        "ancho_oscuro": dark_w,
+        "alto_oscuro": dark_h,
+        "area": area,
+    }
+
+
+def analizar_firmas_control(crop, filas_esperadas=None):
+    """Verifica la firma real de cada responsable dentro de la hoja de control."""
+    rows = _segmentar_filas_tabla(
+        crop,
+        line_ratio=0.45,
+        filas_esperadas=filas_esperadas,
+    )
+
+    if not rows:
+        n = int(filas_esperadas or 3)
+        n = max(3, min(4, n))
+        rows = [
+            (int(round(i * crop.height / n)), int(round((i + 1) * crop.height / n)))
+            for i in range(n)
+        ]
+
+    firmas = []
+    metricas = []
+    for y0, y1 in rows[:4]:
+        row = crop.crop((0, y0, crop.width, y1))
+        tiene, metrica = _fila_tiene_firma(row)
+        firmas.append(tiene)
+        metricas.append(metrica)
+
+    n_filas = max(3, min(4, int(filas_esperadas or len(firmas) or 3)))
+    firmas = (firmas + [False] * n_filas)[:n_filas]
+    metricas = (metricas + [{}] * n_filas)[:n_filas]
+
+    return {"firmas": firmas, "filas": n_filas, "metricas": metricas}
+

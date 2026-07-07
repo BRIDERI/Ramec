@@ -1,9 +1,9 @@
 """
-Construye el reporte de 5 pestañas con las MISMAS columnas y la misma lógica
-SI / NO / SIN_DATO / NO_APLICA que el script de producción.
+Construye el reporte de RAMEC con la lógica SI / NO / SIN_DATO / NO_APLICA.
 
-Cada builder recibe los campos ya extraídos (por nomenclatura.py y extract.py) y
-devuelve el dict de una fila. write_report() arma el xlsx.
+La hoja VALIDACION_PROFESIONAL ya no considera suficiente la presencia de una
+caja detectada. En documentos, informa responsables, firma real por fila, fecha
+de validación y una conclusión final.
 """
 import pandas as pd
 
@@ -85,36 +85,85 @@ def fila_control_cambios(path, existe, fecha_caratula, fecha_ctrl,
     }
 
 
-def fila_validacion_profesional(path, tipo, pres):
-    """Módulo NUEVO: verifica la PRESENCIA de los elementos de validación profesional
-    que el detector localiza. No usa OCR; es presencia por detección.
+def _sn(valor):
+    return "SI" if bool(valor) else "NO"
 
-    PLANO     -> responsables (6), validacion_profesional (7), entidades/logos (8).
-    DOCUMENTO -> validacion_profesional_hoja_control (9), responsables_hoja_control (18),
-                 firmas_aprobacion_paginas (19), logo_entidades (20 o 22).
+
+def fila_validacion_profesional(path, tipo, datos):
+    """Construye la fila de validación profesional.
+
+    PLANO:
+        Mantiene la validación por presencia de responsables, validación y entidades.
+
+    DOCUMENTO:
+        - Extrae Elaboró, Revisó, Aprobó 1 y Aprobó 2 (si existe).
+        - Verifica una rúbrica real por cada fila.
+        - Extrae la fecha de validación.
+        - Compara esa fecha con carátula y última revisión.
+        - Concluye SI únicamente si responsables, firmas y fecha están completos.
     """
-    def f(b):
-        return "SI" if b else "NO"
     if tipo == "PLANO":
-        responsables = pres.get("responsables", False)
-        validacion = pres.get("validacion_profesional", False)
-        logos = pres.get("entidades", False)
-        firmas_val = "NO_APLICA"
+        responsables = datos.get("responsables", False)
+        validacion = datos.get("validacion_profesional", False)
+        logos = datos.get("entidades", False)
         ok = responsables and validacion and logos
-    else:
-        responsables = pres.get("responsables_hoja_control", False)
-        validacion = pres.get("validacion_profesional_hoja_control", False)
-        firmas = pres.get("firmas_aprobacion_paginas", False)
-        logos = pres.get("logo_entidades_caratula", False) or pres.get("logo_entidades_paginas", False)
-        firmas_val = f(firmas)
-        ok = responsables and validacion and firmas and logos
+        return {
+            "Ruta": str(path), "Archivo": path.name, "Tipo": tipo,
+            "Responsables_Plano": _sn(responsables),
+            "Validacion_Profesional_Plano": _sn(validacion),
+            "Logo_Entidades": _sn(logos),
+            "Validacion_Profesional": _sn(ok),
+        }
+
+    nombres = list(datos.get("nombres", []))
+    firmas = list(datos.get("firmas", []))
+    filas = int(datos.get("filas", 0) or 0)
+
+    filas = max(filas, len(nombres), len(firmas))
+    # Los tres roles mínimos siempre son obligatorios.
+    filas = max(3, min(4, filas or 3))
+
+    nombres = (nombres + [""] * 4)[:4]
+    firmas = (firmas + [False] * 4)[:4]
+
+    aplica_aprobo2 = filas >= 4
+    requeridos = 4 if aplica_aprobo2 else 3
+
+    responsables_completos = all(bool(nombres[i].strip()) for i in range(requeridos))
+    firmas_completas = all(bool(firmas[i]) for i in range(requeridos))
+
+    fecha_validacion = datos.get("fecha_validacion", "")
+    fechas_validacion = list(datos.get("fechas_validacion", []))
+    fechas_uniformes = bool(fecha_validacion) and len(set(fechas_validacion or [fecha_validacion])) == 1
+
+    fecha_caratula = datos.get("fecha_caratula", "")
+    fecha_ultima_revision = datos.get("fecha_ultima_revision", "")
+    fecha_coincide = bool(
+        fechas_uniformes
+        and fecha_caratula
+        and fecha_ultima_revision
+        and fecha_validacion == fecha_caratula == fecha_ultima_revision
+    )
+
+    validacion_ok = responsables_completos and firmas_completas and fecha_coincide
+
     return {
-        "Ruta": str(path), "Archivo": path.name, "Tipo": tipo,
-        "Responsables": f(responsables),
-        "Validacion_Profesional": f(validacion),
-        "Firmas_Aprobacion": firmas_val,
-        "Logo_Entidades": f(logos),
-        "Validacion_Profesional_OK": "SI" if ok else "NO",
+        "Ruta": str(path),
+        "Archivo": path.name,
+        "Tipo": tipo,
+        "Elaboró": nombres[0],
+        "Revisó": nombres[1],
+        "Aprobó_1": nombres[2],
+        "Aprobó_2": nombres[3] if aplica_aprobo2 else "",
+        "Firma_Elaboró": _sn(firmas[0]),
+        "Firma_Revisó": _sn(firmas[1]),
+        "Firma_Aprobó_1": _sn(firmas[2]),
+        "Firma_Aprobó_2": _sn(firmas[3]) if aplica_aprobo2 else "NO_APLICA",
+        "Fecha_validacion": fecha_validacion,
+        "Responsables_completos": _sn(responsables_completos),
+        "Firmas_completas": _sn(firmas_completas),
+        "Fecha_coincide": _sn(fecha_coincide),
+        "Validacion_profesional": _sn(validacion_ok),
     }
 
 
@@ -130,4 +179,14 @@ def write_report(salida, estandar, comp_plano, comp_doc, coherencia, control, va
         if control:
             pd.DataFrame(control).to_excel(xw, sheet_name="CONTROL_CAMBIOS_DOC", index=False)
         if validacion:
-            pd.DataFrame(validacion).to_excel(xw, sheet_name="VALIDACION_PROFESIONAL", index=False)
+            df = pd.DataFrame(validacion)
+            preferidas = [
+                "Ruta", "Archivo", "Tipo",
+                "Elaboró", "Revisó", "Aprobó_1", "Aprobó_2",
+                "Firma_Elaboró", "Firma_Revisó", "Firma_Aprobó_1", "Firma_Aprobó_2",
+                "Fecha_validacion", "Responsables_completos", "Firmas_completas",
+                "Fecha_coincide", "Validacion_profesional",
+            ]
+            orden = [c for c in preferidas if c in df.columns]
+            orden += [c for c in df.columns if c not in orden]
+            df[orden].to_excel(xw, sheet_name="VALIDACION_PROFESIONAL", index=False)

@@ -37,6 +37,9 @@ FEC_CARAT = C.NAME_TO_ID["fecha_caratula"]                  # 14
 NUM_CTRL = C.NAME_TO_ID["num_documento_hoja_control"]       # 15
 TIT_CTRL = C.NAME_TO_ID["titulo_documento_hoja_control"]    # 16
 FEC_CTRL = C.NAME_TO_ID["fecha_ultima_revision_hoja_control"]  # 10
+VAL_CTRL = C.NAME_TO_ID["validacion_profesional_hoja_control"]  # 9
+FEC_APROB = C.NAME_TO_ID["fecha_aprobacion_hoja_control"]      # 17
+RESP_CTRL = C.NAME_TO_ID["responsables_hoja_control"]          # 18
 
 # clases de VALIDACIÓN PROFESIONAL (presencia por detección)
 PROF_PLANO = ["responsables", "validacion_profesional", "entidades"]
@@ -122,7 +125,16 @@ def procesar_documento(model, pdf_path):
 
     f = {"nd": "", "titulo": "", "fecha_caratula": "",
          "existe_ctrl": control is not None, "fecha_ctrl": "", "titulo_ctrl": "", "nodoc_ctrl": "",
-         "prof": prof}
+         "prof": prof,
+         "prof_detalle": {
+             "nombres": [],
+             "firmas": [],
+             "filas": 3,
+             "fecha_validacion": "",
+             "fechas_validacion": [],
+             "fecha_caratula": "",
+             "fecha_ultima_revision": "",
+         }}
     if caratula:
         img, boxes = caratula
         if NUM_CARAT in boxes:
@@ -139,6 +151,42 @@ def procesar_documento(model, pdf_path):
             f["titulo_ctrl"] = EX.leer_titulo(EX.crop_box(img, boxes[TIT_CTRL][0]))
         if FEC_CTRL in boxes:
             f["fecha_ctrl"] = EX.leer_fecha_ultima(EX.crop_box(img, boxes[FEC_CTRL][0]))
+
+        resp_info = {"nombres": [], "filas": 3}
+        if RESP_CTRL in boxes:
+            resp_crop = EX.crop_box(img, boxes[RESP_CTRL][0])
+            resp_info = EX.leer_responsables_control(resp_crop)
+
+        firma_info = {"firmas": [], "filas": resp_info.get("filas", 3)}
+        if VAL_CTRL in boxes:
+            firma_crop = EX.crop_box(img, boxes[VAL_CTRL][0])
+            firma_info = EX.analizar_firmas_control(
+                firma_crop,
+                filas_esperadas=resp_info.get("filas", 3),
+            )
+
+        fechas_validacion = []
+        if FEC_APROB in boxes:
+            fecha_crop = EX.crop_box(img, boxes[FEC_APROB][0])
+            fechas_validacion = EX.leer_fechas(fecha_crop)
+
+        if len(fechas_validacion) == 1:
+            fecha_validacion = fechas_validacion[0]
+        elif fechas_validacion:
+            fecha_validacion = " | ".join(fechas_validacion)
+        else:
+            fecha_validacion = ""
+
+        f["prof_detalle"] = {
+            "nombres": resp_info.get("nombres", []),
+            "firmas": firma_info.get("firmas", []),
+            "filas": max(resp_info.get("filas", 3), firma_info.get("filas", 3)),
+            "fecha_validacion": fecha_validacion,
+            "fechas_validacion": fechas_validacion,
+            "fecha_caratula": f["fecha_caratula"],
+            "fecha_ultima_revision": f["fecha_ctrl"],
+        }
+
     return f
 
 
@@ -182,8 +230,8 @@ def main():
             control.append(RP.fila_control_cambios(
                 p, f["existe_ctrl"], f["fecha_caratula"], f["fecha_ctrl"],
                 f["titulo"], f["titulo_ctrl"], f["nd"], f["nodoc_ctrl"]))
-            pres = {n: (n in f["prof"]) for n in PROF_DOC}
-            validacion.append(RP.fila_validacion_profesional(p, tipo, pres))
+            validacion.append(RP.fila_validacion_profesional(
+                p, tipo, f["prof_detalle"]))
 
     Path(args.salida).parent.mkdir(parents=True, exist_ok=True)
     RP.write_report(args.salida, estandar, comp_plano, comp_doc, coherencia, control, validacion)
