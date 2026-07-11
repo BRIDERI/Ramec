@@ -701,3 +701,210 @@ def analizar_firmas_control(crop, filas_esperadas=None):
 
     return {"firmas": firmas, "filas": n_filas, "metricas": metricas}
 
+
+# ================== VALIDACIÓN COMPLEMENTARIA POR PÁGINA ==================
+def limpiar_texto(txt):
+    """Limpia texto OCR conservando saltos de línea útiles."""
+    txt = "" if txt is None else str(txt)
+    txt = txt.replace("\x0c", " ")
+    txt = re.sub(r"[ \t]+", " ", txt)
+    txt = re.sub(r"\n{2,}", "\n", txt)
+    return txt.strip()
+
+# Estas funciones apoyan a infer.py para leer sellos laterales, firmantes,
+# cargos, CIP y entidades/logo en páginas completas. Se mantienen aquí porque
+# son funciones de extracción/OCR, no de armado del reporte.
+
+def limpiar_lineal(txt):
+    """Normaliza un texto OCR a una sola línea segura para Excel/reporte."""
+    txt = limpiar_texto(txt) if "limpiar_texto" in globals() else (txt or "")
+    txt = (txt or "").replace("\n", " ")
+    txt = re.sub(r"\s+", " ", txt).strip()
+    if txt.lower() in ("nan", "none", "null"):
+        return ""
+    return txt
+
+
+def _ocr_img_safe(prepped, psm=6, whitelist=False, lang="spa"):
+    """OCR con fallback a inglés si el idioma spa no está instalado."""
+    try:
+        return _ocr_img(prepped, psm=psm, whitelist=whitelist, lang=lang)
+    except Exception:
+        return _ocr_img(prepped, psm=psm, whitelist=whitelist, lang="eng")
+
+
+def ocr_mejor_rotacion(crop, tipo="sello"):
+    """Prueba rotaciones y PSMs para quedarse con el OCR más útil.
+
+    Args:
+        crop: PIL.Image del recorte.
+        tipo: "sello" o "logo"; cambia las palabras que mejoran el puntaje.
+
+    Returns:
+        (texto, rotacion, psm)
+    """
+    candidatos = []
+
+    if crop is None:
+        return "", 0, 6
+
+    if crop.mode != "RGB":
+        crop = crop.convert("RGB")
+
+    if tipo == "sello":
+        claves = [
+            "CIP", "REG", "GERENTE", "JEFE", "ESPECIALISTA",
+            "PROYECTO", "CONCESIONARIA", "CONSTRUCCION", "CONSTRUCCIÓN"
+        ]
+    else:
+        claves = [
+            "PROINVERSION", "PROINVERSIÓN", "MTC", "MINISTERIO", "TRANSPORTES",
+            "COMUNICACIONES", "OSITRAN", "CONCESIONARIA", "ANILLO", "VIAL", "AVP"
+        ]
+
+    for rot in (0, 90, 180, 270):
+        pil = crop.rotate(rot, expand=True)
+
+        for psm in (6, 11, 12):
+            textos = []
+            for prepped in _prep_variants(pil):
+                try:
+                    textos.append(_ocr_img_safe(prepped, psm=psm, whitelist=False, lang="spa"))
+                except Exception:
+                    pass
+
+            texto = limpiar_texto(" ".join(textos))
+            texto_u = _strip_accents(texto).upper()
+
+            score = len(re.sub(r"[^A-Z0-9]", "", texto_u))
+            for clave in claves:
+                if _strip_accents(clave).upper() in texto_u:
+                    score += 40
+
+            candidatos.append((score, rot, psm, texto))
+
+    if not candidatos:
+        return "", 0, 6
+
+    candidatos.sort(reverse=True, key=lambda x: x[0])
+    _, rot, psm, texto = candidatos[0]
+    return texto, rot, psm
+
+
+def extraer_datos_sello(texto):
+    """Extrae nombre, cargo y CIP desde el OCR de un sello/firma lateral."""
+    texto_limpio = limpiar_texto(texto)
+    texto_u = _strip_accents(texto_limpio).upper()
+
+    nombre = ""
+    cargo = ""
+    cip = ""
+
+    m = re.search(r"(?:REG\.?\s*)?CIP\.?\s*(?:N[°º]?\s*)?(\d{3,8})", texto_u)
+    if m:
+        cip = m.group(1)
+    elif "2049" in texto_u:
+        cip = "2049"
+    elif "264301" in texto_u:
+        cip = "264301"
+
+    # Reglas para los sellos frecuentes encontrados en el dataset AVP.
+    if "MAYRA" in texto_u and "GOMEZ" in texto_u and "SANDOVAL" in texto_u:
+        nombre = "Mayra Gómez Sandoval"
+        cargo = "Jefe de Proyecto"
+
+    elif "ELISEO" in texto_u and "ALVAREZ" in texto_u:
+        nombre = "Eliseo Álvarez Palomares"
+        cargo = "Especialista"
+        if not cip and "2049" in texto_u:
+            cip = "2049"
+
+    elif "ARMANDO" in texto_u and "GON" in texto_u:
+        nombre = "Armando González González"
+        cargo = "Gerente de Proyecto"
+        if not cip and "264301" in texto_u:
+            cip = "264301"
+
+    elif "MIGUE" in texto_u and "GUTI" in texto_u:
+        nombre = "Miguel Núñez Gutiérrez"
+        cargo = "Gerente de Construcción" if "CONSTRU" in texto_u else "Gerente"
+
+    # Fallback genérico: toma una línea que parezca nombre propio.
+    if not nombre:
+        lineas = [l.strip() for l in texto_limpio.splitlines() if l.strip()]
+        excluir = [
+            "CIP", "REG", "GERENTE", "JEFE", "ESPECIALISTA",
+            "COORDINADOR", "RESPONSABLE", "SUPERVISOR",
+            "SOCIEDAD", "CONCESIONARIA", "PROYECTO", "SAC", "S.A.C"
+        ]
+        for linea in lineas:
+            u = _strip_accents(linea).upper()
+            u = re.sub(r"[^A-ZÑ ]", " ", u)
+            u = re.sub(r"\s+", " ", u).strip()
+            if len(u.split()) >= 2 and not any(e in u for e in excluir):
+                nombre = linea.title()
+                break
+
+    if not cargo:
+        if "JEFE" in texto_u:
+            cargo = "Jefe de Proyecto"
+        elif "ESPECIALISTA" in texto_u:
+            cargo = "Especialista"
+        elif "GERENTE" in texto_u and "CONSTRU" in texto_u:
+            cargo = "Gerente de Construcción"
+        elif "GERENTE" in texto_u:
+            cargo = "Gerente de Proyecto"
+
+    return nombre, cargo, cip
+
+
+def identificar_entidades_logo(texto):
+    """Devuelve entidades limpias detectadas desde el OCR de un logo."""
+    txt = _strip_accents(texto or "").upper()
+    entidades = []
+
+    if "PROINVERSION" in txt:
+        entidades.append("PROINVERSIÓN")
+
+    if "MTC" in txt or "MINISTERIO" in txt or "TRANSPORTES" in txt:
+        entidades.append("MTC")
+
+    if "OSITRAN" in txt:
+        entidades.append("OSITRAN")
+
+    if "CONCESIONARIA" in txt or "ANILLO VIAL" in txt or "AVP" in txt:
+        entidades.append("Sociedad Concesionaria Anillo Vial")
+
+    salida = []
+    for entidad in entidades:
+        if entidad not in salida:
+            salida.append(entidad)
+
+    if not salida:
+        return "Logo detectado; entidad no identificada por OCR"
+
+    return " | ".join(salida)
+
+
+def recortar_xyxy(page_img, xyxy):
+    """Recorta una caja xyxy en píxeles sobre una imagen PIL."""
+    w, h = page_img.size
+    x1, y1, x2, y2 = [int(v) for v in xyxy]
+    x1, y1 = max(0, x1), max(0, y1)
+    x2, y2 = min(w, x2), min(h, y2)
+    if x2 <= x1 or y2 <= y1:
+        return page_img.crop((0, 0, 1, 1))
+    return page_img.crop((x1, y1, x2, y2))
+
+
+def expandir_xyxy(xyxy, image_size, margen=80):
+    """Amplía una caja xyxy para que el OCR capture texto alrededor del logo."""
+    w, h = image_size
+    x1, y1, x2, y2 = [int(v) for v in xyxy]
+    return (
+        max(0, x1 - margen),
+        max(0, y1 - margen),
+        min(w, x2 + margen),
+        min(h, y2 + margen),
+    )
+
