@@ -35,6 +35,8 @@ MESES = {"ENERO": "01", "FEBRERO": "02", "MARZO": "03", "ABRIL": "04", "MAYO": "
          "JUNIO": "06", "JULIO": "07", "AGOSTO": "08", "SEPTIEMBRE": "09",
          "SETIEMBRE": "09", "OCTUBRE": "10", "NOVIEMBRE": "11", "DICIEMBRE": "12"}
 RX_FECHA_DMY = re.compile(r"\b(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{4})\b")
+# Fecha sin año: se conserva tal cual; no se infiere el año.
+RX_FECHA_DM = re.compile(r"\b(\d{1,2})[\/\-.](\d{1,2})(?![\/\-.]\d)\b")
 RX_FECHA_TEXTO = re.compile(
     r"\b(\d{1,2})\s+DE\s+(ENERO|FEBRERO|MARZO|ABRIL|MAYO|JUNIO|JULIO|AGOSTO|"
     r"SEPTIEMBRE|SETIEMBRE|OCTUBRE|NOVIEMBRE|DICIEMBRE)\s+DE\s+(\d{4})\b", re.IGNORECASE
@@ -121,6 +123,111 @@ def _normalizar_fecha(s):
         if mo:
             return f"{int(d):02d}/{mo}/{y}"
     return ""
+
+
+def _fechas_literal_en_texto(s):
+    """Devuelve fechas en el orden en que aparecen, sin completar datos faltantes.
+
+    - 21 de abril de 2026 -> 21/04/2026
+    - 21/04/2026 -> 21/04/2026
+    - 21/04 -> 21/04
+
+    Importante: no infiere el año cuando el documento solo trae día y mes.
+    """
+    raw = _strip_accents(s or "").upper()
+    eventos = []
+
+    for m in RX_FECHA_DMY.finditer(raw):
+        d, mo, y = m.groups()
+        eventos.append((m.start(), f"{int(d):02d}/{int(mo):02d}/{y}"))
+
+    for m in RX_FECHA_TEXTO.finditer(raw):
+        d, mes, y = m.groups()
+        mo = MESES.get(_strip_accents(mes).upper(), "")
+        if mo:
+            eventos.append((m.start(), f"{int(d):02d}/{mo}/{y}"))
+
+    # Evitar duplicar el día/mes de una fecha completa ya capturada.
+    spans_completos = [m.span() for m in RX_FECHA_DMY.finditer(raw)]
+    for m in RX_FECHA_DM.finditer(raw):
+        if any(a <= m.start() < b for a, b in spans_completos):
+            continue
+        d, mo = m.groups()
+        eventos.append((m.start(), f"{int(d):02d}/{int(mo):02d}"))
+
+    return [v for _, v in sorted(eventos, key=lambda x: x[0])]
+
+
+def leer_texto_pdf_pagina(pdf_path, page_num):
+    """Lee el texto digital de una página PDF, si existe. Es rápido y no usa OCR."""
+    try:
+        import fitz  # PyMuPDF
+        with fitz.open(str(pdf_path)) as doc:
+            if page_num < 1 or page_num > len(doc):
+                return ""
+            return doc[page_num - 1].get_text("text") or ""
+    except Exception:
+        return ""
+
+
+def extraer_control_cambios_desde_texto(texto):
+    """Extrae campos de la hoja de control desde texto digital del PDF.
+
+    No reemplaza a YOLO: se usa como respaldo cuando la caja fue localizada pero
+    el OCR del recorte no devolvió texto confiable. No inventa fechas ni años.
+    """
+    t = texto or ""
+    out = {"fecha_ctrl": "", "titulo_ctrl": "", "nodoc_ctrl": ""}
+
+    # Última fecha explícita dentro de la tabla de control.
+    bloque_fecha = t
+    m_bloque = re.search(r"Fecha\s+del\s+cambio(.+?)(?:Título\s+del\s+documento|Titulo\s+del\s+documento)", t, re.I | re.S)
+    if m_bloque:
+        bloque_fecha = m_bloque.group(1)
+    fechas = _fechas_literal_en_texto(bloque_fecha)
+    if fechas:
+        out["fecha_ctrl"] = fechas[-1]
+
+    # Título entre etiqueta y No. Doc.
+    m_tit = re.search(r"T[ií]tulo\s+del\s+documento\s+(.+?)\s+No\.?\s*Doc\.?\s*:", t, re.I | re.S)
+    if m_tit:
+        out["titulo_ctrl"] = limpiar_titulo_control(m_tit.group(1))
+
+    # Código del documento luego de No. Doc. o en cualquier parte si la etiqueta falla.
+    m_nd = re.search(r"No\.?\s*Doc\.?\s*:\s*([^\n]+)", t, re.I)
+    if m_nd:
+        m_code = RX_DOC_CODE.search(m_nd.group(1))
+        if m_code:
+            out["nodoc_ctrl"] = _clean_code(m_code.group(0))
+    if not out["nodoc_ctrl"]:
+        codes = [m.group(0) for m in RX_DOC_CODE.finditer(t)]
+        if codes:
+            # Normalmente aparece en encabezado y en la tabla: usar el último explícito.
+            out["nodoc_ctrl"] = _clean_code(codes[-1])
+
+    return out
+
+
+def recortar_zona_sello_inferior_izquierdo(img):
+    """Recorta una zona pequeña donde suelen ubicarse sellos de visado.
+
+    No valida por ubicación únicamente: solo entrega el recorte para leerlo.
+    La detección final depende de texto/OCR explícito.
+    """
+    w, h = img.size
+    return img.crop((0, int(h * 0.50), int(w * 0.28), int(h * 0.94)))
+
+
+def es_sello_detectado_por_texto(texto):
+    """Detecta sello por texto leído explícitamente; no inventa firmantes ni CIP."""
+    n = _norm_text_cmp(texto)
+    if not n:
+        return False
+    claves = (
+        "TARYET", "TARJET", "INGENIERIA DE TRANSPORTE",
+        "REPRESENTANTE LEGAL", "REPRESENTANTE", "V B", "VB", "VºB", "V°B"
+    )
+    return any(k in n for k in claves)
 
 
 def _normalizar_token_plano(tok):
@@ -379,21 +486,13 @@ def leer_fecha_ultima(crop):
     fechas = []
     for psm in (4, 11, 6):
         for txt in ocr_variants(crop, psm=psm):
-            txt = _strip_accents(txt).upper()
-            for m in RX_FECHA_DMY.finditer(txt):
-                d, mo, y = m.groups()
-                fechas.append((int(y), int(mo), int(d)))
-            for m in RX_FECHA_TEXTO.finditer(txt):
-                d, mes, y = m.groups()
-                mo = MESES.get(_strip_accents(mes).upper(), "")
-                if mo:
-                    fechas.append((int(y), int(mo), int(d)))
+            fechas.extend(_fechas_literal_en_texto(txt))
 
     if not fechas:
         return ""
 
-    y, mo, d = max(fechas)
-    return f"{d:02d}/{mo:02d}/{y}"
+    # Última fecha leída en la zona de control. No se infiere año si no existe.
+    return fechas[-1]
 
 # ================== VALIDACIÓN PROFESIONAL DE HOJA DE CONTROL ==================
 def _cluster_indices(indices):

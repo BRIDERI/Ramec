@@ -73,7 +73,7 @@ def fila_control_cambios(path, existe, fecha_caratula, fecha_ctrl,
         fecha_ok = titulo_ok = nodoc_ok = "NO_APLICA"
         obs = "No tiene hoja de control de cambios en página 2"
     else:
-        fecha_ok = "SI" if (fecha_caratula and fecha_ctrl and fecha_caratula == fecha_ctrl) else "NO"
+        fecha_ok = _comparar_fechas_sin_inferir(fecha_caratula, fecha_ctrl)
         titulo_ok = "SI" if (_norm_text_cmp(titulo) and
                              canon_codigos(_norm_text_cmp(titulo)) ==
                              canon_codigos(limpiar_titulo_control(titulo_ctrl))) else "NO"
@@ -87,6 +87,8 @@ def fila_control_cambios(path, existe, fecha_caratula, fecha_ctrl,
             obs_parts.append("No se pudo leer título en control de cambios")
         if not nodoc_ctrl:
             obs_parts.append("No se pudo leer No. Doc. en control de cambios")
+        if fecha_ok == "REVISAR":
+            obs_parts.append("La fecha de control de cambios no incluye año; no se infiere automáticamente")
         obs = " | ".join(obs_parts)
     return {
         "Ruta": str(path), "Archivo": path.name,
@@ -103,6 +105,40 @@ def fila_control_cambios(path, existe, fecha_caratula, fecha_ctrl,
 
 def _sn(valor):
     return "SI" if bool(valor) else "NO"
+
+
+def _fecha_partes(valor):
+    """Devuelve (dd/mm, tiene_anio). No completa años faltantes."""
+    v = str(valor or "").strip()
+    m = re.fullmatch(r"(\d{1,2})/(\d{1,2})/(\d{4})", v)
+    if m:
+        d, mo, _y = m.groups()
+        return f"{int(d):02d}/{int(mo):02d}", True
+    m = re.fullmatch(r"(\d{1,2})/(\d{1,2})", v)
+    if m:
+        d, mo = m.groups()
+        return f"{int(d):02d}/{int(mo):02d}", False
+    return "", False
+
+
+def _comparar_fechas_sin_inferir(a, b):
+    """Compara fechas sin asumir años.
+
+    - SI: fechas exactamente iguales.
+    - REVISAR: coincide día/mes, pero una fecha no contiene año.
+    - NO: fechas diferentes o faltantes.
+    """
+    a = str(a or "").strip()
+    b = str(b or "").strip()
+    if not a or not b:
+        return "NO"
+    if a == b:
+        return "SI"
+    dm_a, anio_a = _fecha_partes(a)
+    dm_b, anio_b = _fecha_partes(b)
+    if dm_a and dm_b and dm_a == dm_b and (not anio_a or not anio_b):
+        return "REVISAR"
+    return "NO"
 
 
 def fila_validacion_profesional(path, tipo, datos):
@@ -155,14 +191,17 @@ def fila_validacion_profesional(path, tipo, datos):
 
     fecha_caratula = datos.get("fecha_caratula", "")
     fecha_ultima_revision = datos.get("fecha_ultima_revision", "")
-    fecha_coincide = bool(
-        fechas_uniformes
-        and fecha_caratula
-        and fecha_ultima_revision
-        and fecha_validacion == fecha_caratula == fecha_ultima_revision
-    )
+    fecha_presente = bool(fecha_validacion)
 
-    validacion_ok = responsables_completos and firmas_completas and fecha_coincide
+    if fechas_uniformes and fecha_caratula:
+        fecha_coincide = _comparar_fechas_sin_inferir(fecha_validacion, fecha_caratula)
+    else:
+        fecha_coincide = "NO"
+
+    # La validación profesional confirma existencia de responsables, firmas y fecha.
+    # La coincidencia de fecha se informa aparte; no se usa para inventar ni bloquear
+    # la validación profesional cuando las firmas sí están completas.
+    validacion_ok = responsables_completos and firmas_completas and fecha_presente
 
     return {
         "Ruta": str(path),
@@ -179,7 +218,7 @@ def fila_validacion_profesional(path, tipo, datos):
         "Fecha_validacion": fecha_validacion,
         "Responsables_completos": _sn(responsables_completos),
         "Firmas_completas": _sn(firmas_completas),
-        "Fecha_coincide": _sn(fecha_coincide),
+        "Fecha_coincide": fecha_coincide,
         "Validacion_profesional": _sn(validacion_ok),
         "CUMPLE": "OK" if validacion_ok else "NO",
     }
@@ -213,6 +252,8 @@ def _estado_ok_no(x):
         return "OK"
     if v in ("NO", "OBSERVADO", "NO CUMPLE", "FALSE", "SIN DATO", "SIN_DATO"):
         return "NO"
+    if v in ("REVISAR", "NO COMPARABLE"):
+        return "REVISAR"
     return ""
 
 
@@ -400,11 +441,17 @@ def _resumen_validacion_paginas(df_paginas, df_validacion):
             obs.append(f"Páginas de contenido sin sello lateral detectado: {_lista_paginas(paginas_sin_sello)}.")
 
         if not firmantes:
-            obs.append("No se identificaron firmantes en páginas de contenido.")
+            obs.append("No se identificaron firmantes en páginas de contenido; no se asume valor.")
         if not cips:
-            obs.append("No se identificaron CIP en páginas de contenido.")
+            obs.append("No se identificaron CIP en páginas de contenido; no se asume valor.")
 
-        if not responsables:
+        # La coincidencia con responsables solo se exige cuando hay firmantes reales.
+        # Para sellos institucionales/V°B° sin nombre o CIP, se reporta NO_APLICA.
+        if not firmantes or firmantes == "NO_APLICA":
+            firmantes_coinciden = "NO_APLICA"
+            responsables_detectados = "NO_APLICA"
+            responsables_no_detectados = "NO_APLICA"
+        elif not responsables:
             obs.append("No se logró recuperar responsables desde la hoja de control para comparación automática.")
         elif firmantes_coinciden in ("NO", "PARCIAL"):
             obs.append("Los firmantes detectados no coinciden completamente con los responsables registrados en la hoja de control.")
@@ -414,9 +461,7 @@ def _resumen_validacion_paginas(df_paginas, df_validacion):
             cumple = "NO"
         if paginas_con_sello < total_contenido:
             cumple = "NO"
-        if not firmantes or not cips:
-            cumple = "NO"
-        if firmantes_coinciden in ("NO", "PARCIAL", "SIN BASE"):
+        if firmantes and firmantes != "NO_APLICA" and firmantes_coinciden in ("NO", "PARCIAL", "SIN BASE"):
             cumple = "NO"
 
         rows.append({

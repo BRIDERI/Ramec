@@ -127,14 +127,14 @@ def procesar_documento(model, pdf_path):
     control = None
     prof = set()     # nombres de clases de validación profesional vistas en cualquier página
 
-    for img in pages:
+    for idx, img in enumerate(pages, start=1):
         res = model.predict(img, imgsz=1280, conf=0.25, verbose=False)[0]
         boxes = best_boxes(res)
         prof |= {C.CLASSES[c] for c in boxes if C.CLASSES[c] in PROF_DOC}
         if caratula is None and (NUM_CARAT in boxes or TIT_CARAT in boxes):
-            caratula = (img, boxes)
+            caratula = (idx, img, boxes)
         if control is None and (NUM_CTRL in boxes or TIT_CTRL in boxes or FEC_CTRL in boxes):
-            control = (img, boxes)
+            control = (idx, img, boxes)
         # seguimos recorriendo aunque ya tengamos carátula y control: firmas y logos
         # de páginas aparecen en hojas posteriores y alimentan la validación profesional.
 
@@ -151,7 +151,7 @@ def procesar_documento(model, pdf_path):
              "fecha_ultima_revision": "",
          }}
     if caratula:
-        img, boxes = caratula
+        _page_num, img, boxes = caratula
         if NUM_CARAT in boxes:
             f["nd"] = EX.leer_no_doc(EX.crop_box(img, boxes[NUM_CARAT][0]))
         if TIT_CARAT in boxes:
@@ -160,7 +160,7 @@ def procesar_documento(model, pdf_path):
             f["fecha_caratula"] = EX.leer_fecha(EX.crop_box(img, boxes[FEC_CARAT][0]))
 
     if control:
-        img, boxes = control
+        page_num_control, img, boxes = control
         if NUM_CTRL in boxes:
             f["nodoc_ctrl"] = EX.leer_no_doc(EX.crop_box(img, boxes[NUM_CTRL][0]))
         if TIT_CTRL in boxes:
@@ -192,6 +192,19 @@ def procesar_documento(model, pdf_path):
             fecha_validacion = " | ".join(fechas_validacion)
         else:
             fecha_validacion = ""
+
+        # Respaldo rápido y sin suposiciones: si el OCR del recorte no logra leer
+        # fecha/N° Doc./título, se lee el texto digital de la misma página del PDF.
+        # Esto no inventa datos; solo recupera texto existente en el PDF.
+        if (not f["fecha_ctrl"]) or (not f["nodoc_ctrl"]) or (not f["titulo_ctrl"]):
+            texto_control = EX.leer_texto_pdf_pagina(pdf_path, page_num_control)
+            ctrl_txt = EX.extraer_control_cambios_desde_texto(texto_control)
+            if not f["fecha_ctrl"] and ctrl_txt.get("fecha_ctrl"):
+                f["fecha_ctrl"] = ctrl_txt["fecha_ctrl"]
+            if not f["nodoc_ctrl"] and ctrl_txt.get("nodoc_ctrl"):
+                f["nodoc_ctrl"] = ctrl_txt["nodoc_ctrl"]
+            if not f["titulo_ctrl"] and ctrl_txt.get("titulo_ctrl"):
+                f["titulo_ctrl"] = ctrl_txt["titulo_ctrl"]
 
         f["prof_detalle"] = {
             "nombres": resp_info.get("nombres", []),
@@ -305,6 +318,35 @@ def procesar_paginas_complementarias(model, pdf_path, max_pages=None, out_dir=No
                 "Recorte_sello": str(crop_path),
             })
 
+        if not sellos_pagina and tipo_pagina == "Contenido":
+            # Respaldo liviano: solo cuando YOLO no entregó caja de sello.
+            # Se recorta la zona inferior izquierda y se valida únicamente si el OCR
+            # lee texto de sello/visado; no se asumen nombres, cargos ni CIP.
+            crop_fb = EX.recortar_zona_sello_inferior_izquierdo(img)
+            texto_fb, rot_fb, psm_fb = EX.ocr_mejor_rotacion(crop_fb, tipo="sello")
+            if EX.es_sello_detectado_por_texto(texto_fb):
+                crop_name = f"{pdf_path.stem}_pag_{page_num:03d}_sello_zona_inferior_izquierda.png"
+                crop_path = out_sellos / crop_name
+                try:
+                    crop_fb.save(crop_path)
+                except Exception:
+                    crop_path = ""
+                sellos_pagina.append((-1, 0.0, crop_fb))
+                rows_sellos.append({
+                    "Archivo": pdf_path.name,
+                    "Página": page_num,
+                    "Tipo_página": tipo_pagina,
+                    "Sello_detectado": "Sí",
+                    "Firmante_detectado": "NO_APLICA",
+                    "Cargo_detectado": "NO_APLICA",
+                    "CIP_detectado": "NO_APLICA",
+                    "Confianza_sello": "TEXTO",
+                    "Rotación_OCR": rot_fb,
+                    "PSM_OCR": psm_fb,
+                    "Texto_OCR_sello": texto_fb,
+                    "Recorte_sello": str(crop_path),
+                })
+
         if not sellos_pagina:
             rows_sellos.append({
                 "Archivo": pdf_path.name,
@@ -377,6 +419,13 @@ def procesar_paginas_complementarias(model, pdf_path, max_pages=None, out_dir=No
 
         logo_detectado = "Sí" if logos_pagina else "No"
         sello_detectado = "Sí" if sellos_pagina else "No"
+
+        if sello_detectado == "Sí" and not firmantes:
+            # Si el respaldo detectó un sello de visado/institucional sin nombre/CIP,
+            # se registra como NO_APLICA para no inventar datos.
+            firmantes = ["NO_APLICA"]
+            cargos = ["NO_APLICA"]
+            cips = ["NO_APLICA"]
 
         if tipo_pagina in ["Carátula", "Hoja de control"]:
             validacion = (
