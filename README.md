@@ -5,6 +5,18 @@ Sistema que replica el reporte de 5 pestañas del validador de producción
 de detección entrenados con anotaciones de CVAT. El OCR solo lee **dentro** de la
 caja que el modelo localiza, sobre el render a resolución nativa.
 
+---
+
+> Examen Final - Maestría en Inteligencia Artificial · Curso de Redes Neuronales y Aprendizaje Profundo · Sección A · Grupo 7
+
+Integrantes:
+- Julio Machado Torres.
+- Brigitte Scarlett Del Río Ricce.
+
+Docente:
+- Ph.D. Aldo Camargo Fernández Baca.
+
+---
 
 
 [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/BRIDERI/Ramec/blob/main/RAMEC_colab.ipynb)
